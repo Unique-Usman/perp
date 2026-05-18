@@ -1,0 +1,71 @@
+type Collateral = {
+  available: number;
+  locked: number;
+};
+
+type Position = {
+  market: string;
+  type: "LONG" | "SHORT";
+  qty: number;
+  margin: number;
+  liquidationPrice: number;
+  pnL: number;
+  averagePrice: number;
+};
+
+type Order = {
+  orderId: string;
+  market: string;
+  type: "LONG" | "SHORT";
+  qty: number;
+  margin: number;
+  orderType: "limit" | "market";
+  price: number;
+  status: "filled" | "cancelled" | "partially_filled" | "open";
+};
+
+type Positions = Array<Position>;
+type Orders = Array<Order>;
+
+export type User = {
+  userId: string;
+  username: string;
+  password: string;
+  collateral: Collateral;
+  positions: Positions;
+  orders: Orders;
+};
+
+export type Users = Array<User>;
+
+type Bid = {
+  availableQty: number;
+  openOrders: {
+    userId: string;
+    qty: number;
+    filledQty: number;
+    orderId: string;
+    createdAt: Date;
+  }[];
+};
+
+type Orderbook = {
+  bids: Record<string, Bid>;
+  asks: Record<string, Bid>;
+  lastTradedPrice: number;
+  indexPrice: number;
+};
+
+export type Orderbooks = Record<string, Orderbook>;
+
+type Fill = {
+  maker: string;
+  taker: string;
+  market: string;
+  qty: number;
+  price: number;
+  long: string;
+  short: string;
+};
+
+export type Fills = Array<Fill>;
