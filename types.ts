@@ -3,8 +3,10 @@ type Collateral = {
   locked: number;
 };
 
+export type Market = "SOL" | "ETH" | "BTC" | "USD" | "USDT";
+
 type Position = {
-  market: string;
+  market: Market;
   type: "LONG" | "SHORT";
   qty: number;
   margin: number;
@@ -13,9 +15,9 @@ type Position = {
   averagePrice: number;
 };
 
-type Order = {
+export type Order = {
   orderId: string;
-  market: string;
+  market: Market;
   type: "LONG" | "SHORT";
   qty: number;
   margin: number;
@@ -56,12 +58,12 @@ type Orderbook = {
   indexPrice: number;
 };
 
-export type Orderbooks = Record<string, Orderbook>;
+export type Orderbooks = Record<Market, Orderbook>;
 
 type Fill = {
   maker: string;
   taker: string;
-  market: string;
+  market: Market;
   qty: number;
   price: number;
   long: string;
