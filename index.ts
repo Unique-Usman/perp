@@ -30,8 +30,6 @@ app.post("/order", authMiddleWare, (req, res, next) => {
     return next(new AppError("Invalid Request Body", 400, result.error.issues));
   }
   const orderData = result.data;
-  const leverage = (orderData.qty * orderData.price) / orderData.equity;
-
   const userId = (req as Request & { user: string }).user;
   const userFound = globalState.users.find((user) => user.userId === userId);
 
@@ -43,33 +41,24 @@ app.post("/order", authMiddleWare, (req, res, next) => {
     // MARKET ORDER
   } else {
     // Limit order
-    // You ordered based on a price
-    // We checked if it short or long.
-    // if it is long order i.e buy
-    // We check your equity and i.e your margin
-    // we basically lock your margin to avoid double spending
-    // we check if there is a match for your order.
-    // if there is not match, your order sit on the orderbook.
-    // if there is an match, your order will be matched and that will be your positions.
-    // if it is not match, it will still be in the in your position and called open
-    // if it is partially filled, we will partially filled it and marked it partially filled, while the remaining will be in the orderbook
     if (orderData.type === "LONG") {
       // orderType = Limit order and order type = LONG
       // Checking if the users has the balance
       if (orderData.equity > userFound.collateral.available) {
-        return next(new AppError("Insufficient funds", 402));
+        return next(new AppError("Insufficient funds", 409));
       }
 
       // locking the equity from the collateral
       userFound.collateral.available -= orderData.equity;
       userFound.collateral.locked += orderData.equity;
 
-      // check if there is a match or not.
-      const asks = globalState.orderBooks[orderData.market]?.asks;
+      // check if there is a match or not through the minHeap.
+      const asksHeap = globalState.orderBooks[orderData.market].asksHeap;
 
-      const availableOrdersForTheOrderPriceAsk = asks?.[orderData.price];
+      const isPriceAbsent =
+        asksHeap.isEmpty() || asksHeap.peek()! > orderData.price;
 
-      if (!availableOrdersForTheOrderPriceAsk) {
+      if (isPriceAbsent) {
         const order: Order = {
           orderId: crypto.randomUUID(),
           market: orderData.market,
@@ -81,10 +70,10 @@ app.post("/order", authMiddleWare, (req, res, next) => {
           status: "open",
         };
 
-        // add to order to the list of user orders
+        // add order to the list of user orders
         userFound.orders.push(order);
 
-        // order should be added to the orderbook
+        // order should be added to the orderbook and the price to the bidsHeap if not present
         const bidsOrders =
           globalState.orderBooks[order.market]?.bids[order.price];
 
@@ -99,6 +88,9 @@ app.post("/order", authMiddleWare, (req, res, next) => {
           });
         } else {
           // no order in the orderbook for the same price
+          globalState.orderBooks[order.market].bidsHeap.push(
+            Number(order.price),
+          );
           globalState.orderBooks[order.market].bids[order.price] = {
             availableQty: order.qty,
             openOrders: [
@@ -112,16 +104,132 @@ app.post("/order", authMiddleWare, (req, res, next) => {
             ],
           };
         }
-
-        // if (bids) {
-        // } else {
-        //   globalState.orderBooks[order.market].bids
-        // }
+        return res.status(201).json(order);
       } else {
-        if (availableOrdersForTheOrderPriceAsk.availableQty >= orderData.qty) {
-          availableOrdersForTheOrderPriceAsk.availableQty -= orderData.qty;
-          const openOrders = availableOrdersForTheOrderPriceAsk.openOrders;
-        } else {
+        // price is present
+        const fullPriceToBeDeleted: number[] = [];
+        const partiallyFilledPriceOrders: string[] = [];
+        let partialFilledPrice;
+        const asks = globalState.orderBooks[orderData.market].asks;
+        let orderQty = orderData.qty;
+
+        // two scenero can happen either full filled or partial filled.
+
+        while (!asksHeap.isEmpty() && asksHeap.peek()! <= orderData.price) {
+          if (orderQty === 0) {
+            break;
+          }
+          const price = asksHeap.peek()!;
+          const askPriceBid = asks[price]!;
+
+          if (askPriceBid.availableQty <= orderQty) {
+            fullPriceToBeDeleted.push(price);
+            orderQty -= askPriceBid.availableQty;
+            asksHeap.pop();
+          } else {
+            for (const order of askPriceBid.openOrders) {
+              partiallyFilledPriceOrders.push(order.orderId);
+              if (orderQty <= order.qty - order.filledQty) {
+                orderQty = 0;
+                order.filledQty += orderQty;
+              } else {
+                orderQty -= order.qty - order.filledQty;
+                order.filledQty = order.qty;
+              }
+            }
+            partialFilledPrice = price;
+          }
+        }
+
+        // handle the full price
+        fullPriceToBeDeleted.forEach((fullPrice) => {
+          asks[fullPrice]?.openOrders.forEach((order) => {
+            globalState.fills.push({
+              taker: userFound.userId,
+              long: userFound.userId,
+              maker: order.userId,
+              market: orderData.market,
+              price: fullPrice,
+              short: order.userId,
+              qty: order.qty - order.filledQty,
+            });
+            // update the user order which is the taker
+            globalState.users
+              .find((user) => user.userId === order.userId)!
+              .orders.find((ord) => ord.orderId === order.orderId)!.status =
+              "filled";
+
+            // add to positions of the user who is buying
+            globalState.addToUserPostion(
+              orderData.market,
+              "LONG",
+              order.qty - order.filledQty,
+              orderData.equity,
+              userFound.userId,
+              fullPrice,
+            );
+            // add to positions of the user who is selling
+            globalState.addToUserPostion(
+              orderData.market,
+              "SHORT",
+              order.qty - order.filledQty,
+              orderData.equity,
+              order.userId,
+              fullPrice,
+            );
+            //
+          });
+        });
+
+        // handle the partial price
+        if (partialFilledPrice) {
+          for (const order of asks![partialFilledPrice]!.openOrders) {
+            if (order.filledQty === order.qty) {
+              globalState.fills.push({
+                taker: userFound.userId,
+                long: userFound.userId,
+                maker: order.userId,
+                market: orderData.market,
+                price: partialFilledPrice,
+                short: order.userId,
+                qty: order.qty - order.filledQty,
+              });
+              // update the user order which is the taker
+              globalState.users
+                .find((user) => user.userId === order.userId)!
+                .orders.find((ord) => ord.orderId === order.orderId)!.status =
+                "filled";
+
+              // add to positions of the user who is buying
+              globalState.addToUserPostion(
+                orderData.market,
+                "LONG",
+                order.qty - order.filledQty,
+                orderData.equity,
+                userFound.userId,
+                partialFilledPrice,
+              );
+              // add to positions of the user who is selling
+              globalState.addToUserPostion(
+                orderData.market,
+                "SHORT",
+                order.qty - order.filledQty,
+                orderData.equity,
+                order.userId,
+                partialFilledPrice,
+              );
+            } else {
+              globalState.fills.push({
+                taker: userFound.userId,
+                long: userFound.userId,
+                maker: order.userId,
+                market: orderData.market,
+                price: partialFilledPrice,
+                short: order.userId,
+                qty: order.qty - order.filledQty,
+              });
+            }
+          }
         }
       }
     } else {

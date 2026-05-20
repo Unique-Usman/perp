@@ -19,6 +19,7 @@
     "bcrypt": "^6.0.0",
     "crypt": "^0.0.2",
     "express": "^5.2.1",
+    "heap-js": "^2.7.1",
     "jsonwebtoken": "^9.0.3",
     "zod": "^4.4.3"
   }

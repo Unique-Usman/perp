@@ -1,3 +1,6 @@
+import Heap from "heap-js";
+("heap-js");
+
 type Collateral = {
   available: number;
   locked: number;
@@ -54,6 +57,8 @@ type Bid = {
 type Orderbook = {
   bids: Record<string, Bid>;
   asks: Record<string, Bid>;
+  bidsHeap: Heap<number>;
+  asksHeap: Heap<number>;
   lastTradedPrice: number;
   indexPrice: number;
 };
