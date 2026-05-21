@@ -10,14 +10,10 @@ const onramp = (req: Request, res: Response, next: NextFunction) => {
     return next(new AppError("Unauthroized", 401));
   }
 
-  const amountToAdd = parseInt(req.body.amount);
+  const amountToAdd = Number(req.body.amount);
 
-  if (isNaN(amountToAdd) || !amountToAdd) {
+  if (isNaN(amountToAdd) || !amountToAdd || amountToAdd < 0) {
     return next(new AppError("Invalid Request body", 400));
-  }
-
-  if (!amountToAdd) {
-    return next(new AppError("Invalid request body, missing amount", 400));
   }
 
   user.collateral.available += amountToAdd;

@@ -8,24 +8,24 @@ class GlobalState {
     SOL: {
       bids: {},
       asks: {},
-      bidsHeap: new Heap<number>(),
-      asksHeap: new Heap<number>(),
+      bidsHeap: new Heap<number>((a, b) => b - a),
+      asksHeap: new Heap<number>((a, b) => a - b),
       lastTradedPrice: 0,
       indexPrice: 0,
     },
     ETH: {
       bids: {},
       asks: {},
-      bidsHeap: new Heap<number>(),
-      asksHeap: new Heap<number>(),
+      bidsHeap: new Heap<number>((a, b) => b - a),
+      asksHeap: new Heap<number>((a, b) => a - b),
       lastTradedPrice: 0,
       indexPrice: 0,
     },
     BTC: {
       bids: {},
       asks: {},
-      bidsHeap: new Heap<number>(),
-      asksHeap: new Heap<number>(),
+      bidsHeap: new Heap<number>((a, b) => b - a),
+      asksHeap: new Heap<number>((a, b) => a - b),
 
       lastTradedPrice: 0,
       indexPrice: 0,
@@ -33,16 +33,16 @@ class GlobalState {
     USD: {
       bids: {},
       asks: {},
-      bidsHeap: new Heap<number>(),
-      asksHeap: new Heap<number>(),
+      bidsHeap: new Heap<number>((a, b) => b - a),
+      asksHeap: new Heap<number>((a, b) => a - b),
       lastTradedPrice: 0,
       indexPrice: 0,
     },
     USDT: {
       bids: {},
       asks: {},
-      bidsHeap: new Heap<number>(),
-      asksHeap: new Heap<number>(),
+      bidsHeap: new Heap<number>((a, b) => b - a),
+      asksHeap: new Heap<number>((a, b) => a - b),
       lastTradedPrice: 0,
       indexPrice: 0,
     },
@@ -57,61 +57,118 @@ class GlobalState {
     userId: string,
     price: number,
   ) {
-    // TODO: Implement a netting logic, i.e when someone place a short if they have long and vice versa
+    // Implement netting logic:
+    // - If same-side position exists, aggregate by weighted average.
+    // - If opposite-side exists, net quantities: realize PnL for closed portion,
+    //   release proportional margin back to user's available collateral,
+    //   and create any remaining position for the incoming side.
     const user = this.users.find((user) => user.userId === userId);
-    const position = user?.positions.find(
+    if (!user) return;
+
+    const position = user.positions.find(
       (position) => position.market === market,
     );
 
-    let currentQty;
-    let currentPrice;
-    let currentpnL;
-    let currentLiquidationPrice;
-    let currentMargin;
-
+    // No existing position: create new
     if (!position) {
-      currentLiquidationPrice = 0;
-      currentpnL = 0;
-      currentPrice = 0;
-      currentQty = 0;
-      currentMargin = 0;
-    } else {
-      currentLiquidationPrice = position.liquidationPrice;
-      currentpnL = position.pnL;
-      currentPrice = position.averagePrice;
-      currentQty = position.qty;
-      currentMargin = position.margin;
+      const leveragePrice = (price * qty) / margin || 0;
+      const liquidationPrice = leveragePrice
+        ? type === "LONG"
+          ? price * (1 - 1 / leveragePrice)
+          : price * (1 + 1 / leveragePrice)
+        : 0;
+
+      user.positions.push({
+        averagePrice: price,
+        liquidationPrice,
+        market,
+        type,
+        pnL: 0,
+        margin,
+        qty,
+      });
+
+      return;
     }
 
-    currentPrice =
-      (currentPrice * currentQty + price * qty) / (currentQty + qty);
-    currentQty += qty;
-    currentMargin += margin;
-    let leveragePrice = (currentPrice * currentQty) / currentMargin;
+    // Same side: aggregate by weighted average
+    if (position.type === type) {
+      const currentQty = position.qty;
+      const currentPrice = position.averagePrice;
+      const currentMargin = position.margin;
 
-    if (type === "LONG") {
-      currentLiquidationPrice = currentPrice * (1 - 1 / leveragePrice);
-    } else {
-      currentLiquidationPrice = currentPrice * (1 + 1 / leveragePrice);
+      const newAvgPrice =
+        (currentPrice * currentQty + price * qty) / (currentQty + qty);
+      const newQty = currentQty + qty;
+      const newMargin = currentMargin + margin;
+      const leveragePrice = (newAvgPrice * newQty) / newMargin || 0;
+      const liquidationPrice = leveragePrice
+        ? type === "LONG"
+          ? newAvgPrice * (1 - 1 / leveragePrice)
+          : newAvgPrice * (1 + 1 / leveragePrice)
+        : 0;
+
+      position.averagePrice = newAvgPrice;
+      position.qty = newQty;
+      position.margin = newMargin;
+      position.liquidationPrice = liquidationPrice;
+
+      return;
     }
 
-    if (position) {
-      position.averagePrice = currentPrice;
-      position.liquidationPrice = currentLiquidationPrice;
-      position.margin = currentMargin;
-      position.qty = currentQty;
+    // Opposite side: net quantities
+    const existingQty = position.qty;
+    const closedQty = Math.min(qty, existingQty);
+
+    // Realized PnL for the closed portion
+    let realizedPnl = 0;
+    if (position.type === "LONG") {
+      realizedPnl = (price - position.averagePrice) * closedQty;
     } else {
-      user!.positions.push({
-        averagePrice: currentPrice,
-        liquidationPrice: currentLiquidationPrice,
-        market: market,
-        type: type,
-        pnL: currentpnL,
-        margin: currentMargin,
-        qty: currentQty,
+      realizedPnl = (position.averagePrice - price) * closedQty;
+    }
+
+    // Release proportional margin from the existing position
+    const releasedMargin = (position.margin * closedQty) / position.qty;
+
+    // Credit user collateral with released margin + realized PnL
+    user.collateral.available += releasedMargin + realizedPnl;
+
+    // Reduce existing position
+    position.qty = position.qty - closedQty;
+    position.margin = position.margin - releasedMargin;
+
+    // If existing position fully closed, remove it
+    if (position.qty === 0) {
+      user.positions = user.positions.filter((p) => p !== position);
+    }
+
+    const remainingIncomingQty = qty - closedQty;
+
+    // If some incoming quantity remains, create a new position on incoming side
+    if (remainingIncomingQty > 0) {
+      const incomingMarginForRemaining = (margin * remainingIncomingQty) / qty;
+      const leveragePrice =
+        (price * remainingIncomingQty) / incomingMarginForRemaining || 0;
+      const liquidationPrice = leveragePrice
+        ? type === "LONG"
+          ? price * (1 - 1 / leveragePrice)
+          : price * (1 + 1 / leveragePrice)
+        : 0;
+
+      user.positions.push({
+        averagePrice: price,
+        liquidationPrice,
+        market,
+        type,
+        pnL: 0,
+        margin: incomingMarginForRemaining,
+        qty: remainingIncomingQty,
       });
     }
   }
+
+  //TODO: calculate the liquidation if new position partially filled the exisiting position
 }
 
 const globalState = new GlobalState();
