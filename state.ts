@@ -117,43 +117,80 @@ class GlobalState {
     }
 
     // Opposite side: net quantities
-    const existingQty = position.qty;
-    const closedQty = Math.min(qty, existingQty);
 
-    // Realized PnL for the closed portion
-    let realizedPnl = 0;
-    if (position.type === "LONG") {
-      realizedPnl = (price - position.averagePrice) * closedQty;
-    } else {
-      realizedPnl = (position.averagePrice - price) * closedQty;
-    }
+    if (position.qty === qty) {
+      // Realized PnL for the closed portion
+      let realizedPnl = 0;
+      if (position.type === "LONG") {
+        realizedPnl = (price - position.averagePrice) * qty;
+      } else {
+        realizedPnl = (position.averagePrice - price) * qty;
+      }
 
-    // Release proportional margin from the existing position
-    const releasedMargin = (position.margin * closedQty) / position.qty;
+      // Release proportional margin from the existing position
+      const releasedMargin = position.margin;
 
-    // Credit user collateral with released margin + realized PnL
-    user.collateral.available += releasedMargin + realizedPnl;
-
-    // Reduce existing position
-    position.qty = position.qty - closedQty;
-    position.margin = position.margin - releasedMargin;
-
-    // If existing position fully closed, remove it
-    if (position.qty === 0) {
+      //Total margin, the released margin and the incoming margin
+      const totalMargin = releasedMargin + margin;
+      // Credit user collateral with released margin + realized PnL
+      user.collateral.available += totalMargin + realizedPnl;
+      user.collateral.locked -= totalMargin;
       user.positions = user.positions.filter((p) => p !== position);
-    }
+    } else if (position.qty > qty) {
+      let realizedPnl = 0;
+      const closedQty = qty;
+      if (position.type === "LONG") {
+        realizedPnl = (price - position.averagePrice) * closedQty;
+      } else {
+        realizedPnl = (position.averagePrice - price) * closedQty;
+      }
 
-    const remainingIncomingQty = qty - closedQty;
+      // Release proportional margin from the existing position
+      const releasedMargin = (position.margin * closedQty) / position.qty;
 
-    // If some incoming quantity remains, create a new position on incoming side
-    if (remainingIncomingQty > 0) {
-      const incomingMarginForRemaining = (margin * remainingIncomingQty) / qty;
-      const leveragePrice =
-        (price * remainingIncomingQty) / incomingMarginForRemaining || 0;
-      const liquidationPrice = leveragePrice
+      position.qty -= qty;
+      position.margin -= releasedMargin;
+      //Total margin, the released margin and the incoming margin
+      const totalMargin = releasedMargin + margin;
+      user.collateral.available += totalMargin + realizedPnl;
+      user.collateral.locked -= totalMargin;
+      // updating the liquidationPrice
+      const totalPriceForRemaingQty = position.averagePrice * position.qty;
+
+      const leverage = totalPriceForRemaingQty / position.margin;
+
+      if (position.type === "LONG") {
+        position.liquidationPrice = position.averagePrice * (1 - 1 / leverage);
+      } else {
+        position.liquidationPrice = position.averagePrice * (1 + 1 / leverage);
+      }
+    } else {
+      let realizedPnl = 0;
+      const closedQty = position.qty;
+      if (position.type === "LONG") {
+        realizedPnl = (price - position.averagePrice) * closedQty;
+      } else {
+        realizedPnl = (position.averagePrice - price) * closedQty;
+      }
+
+      // Release proportional margin from the existing position
+      const releasedIncomingMargin = (margin * closedQty) / qty;
+
+      user.positions = user.positions.filter((p) => p !== position);
+      // Total margin, the released margin and the incoming margin
+      const totalMargin = position.margin + releasedIncomingMargin;
+      user.collateral.available += totalMargin + realizedPnl;
+      user.collateral.locked -= totalMargin;
+      // updating the liquidationPrice
+      const totalPriceForRemaingQty = price * (qty - position.qty);
+
+      const leverage =
+        totalPriceForRemaingQty / (margin - releasedIncomingMargin);
+
+      const liquidationPrice = leverage
         ? type === "LONG"
-          ? price * (1 - 1 / leveragePrice)
-          : price * (1 + 1 / leveragePrice)
+          ? price * (1 - 1 / leverage)
+          : price * (1 + 1 / leverage)
         : 0;
 
       user.positions.push({
@@ -162,13 +199,11 @@ class GlobalState {
         market,
         type,
         pnL: 0,
-        margin: incomingMarginForRemaining,
-        qty: remainingIncomingQty,
+        margin: margin - releasedIncomingMargin,
+        qty: qty - position.qty,
       });
     }
   }
-
-  //TODO: calculate the liquidation if new position partially filled the exisiting position
 }
 
 const globalState = new GlobalState();
