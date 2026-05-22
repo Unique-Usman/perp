@@ -1,6 +1,8 @@
 # dependencies (bun install)
 node_modules
 
+test.ts
+
 # output
 out
 dist

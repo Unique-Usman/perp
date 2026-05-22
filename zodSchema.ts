@@ -6,7 +6,7 @@ export const UserSignUpInSchema = z.object({
 });
 
 export const OrderSchema = z.object({
-  price: z.number(),
+  price: z.number(), // for market type let the use send arbitary price
   qty: z.number(),
   equity: z.number(),
   type: z.enum(["LONG", "SHORT"]),

@@ -1,5 +1,4 @@
 import Heap from "heap-js";
-("heap-js");
 
 type Collateral = {
   available: number;
