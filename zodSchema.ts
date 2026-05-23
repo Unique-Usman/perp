@@ -12,6 +12,7 @@ export const OrderSchema = z.object({
   type: z.enum(["LONG", "SHORT"]),
   market: z.enum(["SOL", "ETH", "BTC"]),
   orderType: z.enum(["market", "limit"]),
+  userId: z.string().optional(),
 });
 
 export const BinancePriceSchema = z.object({

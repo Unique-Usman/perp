@@ -25,7 +25,12 @@ export type Order = {
   margin: number;
   orderType: "limit" | "market" | "liquidation";
   price: number;
-  status: "filled" | "cancelled" | "partially_filled" | "open";
+  status:
+    | "filled"
+    | "cancelled"
+    | "partially_filled"
+    | "open"
+    | "partially_filled_cancelled";
 };
 
 type Positions = Array<Position>;

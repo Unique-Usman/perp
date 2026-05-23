@@ -1,6 +1,7 @@
 import Heap from "heap-js";
 import type { Users, Orderbooks, Fills, Market } from "./types";
 
+//TODO:update the lastTradedPrice on every order
 class GlobalState {
   users: Users = [];
   market: Array<string> = [];

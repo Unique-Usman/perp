@@ -13,6 +13,7 @@ async function liquidationChecks(asset: string, price: number) {
     const positions = user.positions;
     for (const position of positions) {
       const posMarket = position.market;
+      const userId = user.userId;
 
       if (asset !== posMarket) continue;
 
@@ -27,6 +28,7 @@ async function liquidationChecks(asset: string, price: number) {
           "SHORT",
           position.market,
           "liquidation",
+          userId,
         );
       } else {
         // SHORT
@@ -38,6 +40,7 @@ async function liquidationChecks(asset: string, price: number) {
           "LONG",
           position.market,
           "liquidation",
+          userId,
         );
       }
     }
@@ -58,6 +61,7 @@ async function liquidate(
   type: string,
   market: Market,
   orderType: "market" | "limit" | "liquidation",
+  userId: string,
 ) {
   //TODO: This call should handle error better
   await axios.post(
@@ -69,6 +73,7 @@ async function liquidate(
       type,
       market,
       orderType,
+      userId,
     },
     {
       headers: {
