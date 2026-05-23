@@ -1,16 +1,17 @@
 import express from "express";
-import type { Request, Response, NextFunction } from "express";
-import type { Market, Fills, Order, Orderbooks, User, Users } from "./types";
+import type { Request } from "express";
 import errorHandler, { AppError } from "./middleware/errorHandler";
 import notFound from "./middleware/notFound";
 import authMiddleWare from "./middleware/authMiddleware";
 import signUp from "./controller/signUp";
 import signIn from "./controller/signIn";
 import onramp from "./controller/onramp";
-import globalState from "./state";
 import { OrderSchema } from "./zodSchema";
+import matchingEngine from "./engine";
+import { onPriceUpdateFromBinance } from "./liquidation";
 
 const PORT = process.env.PORT;
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const app = express();
 app.use(express.json());
 
@@ -22,7 +23,6 @@ app.post("/signup", signUp);
 app.post("/signin", signIn);
 app.post("/onramp", authMiddleWare, onramp);
 
-// Need lot of work
 app.post("/order", authMiddleWare, (req, res, next) => {
   const result = OrderSchema.safeParse(req.body);
 
@@ -31,613 +31,45 @@ app.post("/order", authMiddleWare, (req, res, next) => {
   }
   const orderData = result.data;
   const userId = (req as Request & { user: string }).user;
-  const userFound = globalState.users.find((user) => user.userId === userId);
 
-  if (!userFound) {
-    return next(new AppError("Unauthorized User", 401));
-  }
+  return matchingEngine(res, next, userId, orderData);
+});
 
-  if (orderData.orderType === "market") {
-    // if is market order, there is no need to have another logic, just append the minimum price for sale and the maximum price for buy, this is obviously not the most ideal way though
-    // update this to current price in of the orderData.market price if this is the first order;
-    if (orderData.type === "SHORT") {
-      const sortedBuy = globalState.orderBooks[orderData.market].bidsHeap
-        .toArray()
-        .sort((a, b) => a - b);
-      orderData.price = sortedBuy[0]!;
-    } else {
-      const sortedAsk = globalState.orderBooks[orderData.market].asksHeap
-        .toArray()
-        .sort((a, b) => b - a);
-      orderData.price = sortedAsk[0]!;
+// This route is for the liquidation
+app.post("/liquidate", (req, res, next) => {
+  try {
+    const authorization = req.headers.authorization;
+
+    if (!authorization) {
+      return next(new AppError("Authorization token missing", 401));
     }
-  }
+    const token = authorization.split(" ")[1];
 
-  // Checking if the users has the balance
-  if (orderData.equity > userFound.collateral.available) {
-    return next(new AppError("Insufficient funds", 409));
-  }
-  // locking the equity from the collateral
-  userFound.collateral.available -= orderData.equity;
-  userFound.collateral.locked += orderData.equity;
-
-  if (orderData.type === "LONG") {
-    // check if there is a match or not through the minHeap of the asksHeap
-    const asksHeap = globalState.orderBooks[orderData.market].asksHeap;
-
-    const isPriceAbsent =
-      asksHeap.isEmpty() || asksHeap.peek()! > orderData.price;
-
-    if (isPriceAbsent) {
-      const order: Order = {
-        orderId: crypto.randomUUID(),
-        market: orderData.market,
-        type: orderData.type,
-        qty: orderData.qty,
-        margin: orderData.equity,
-        orderType: orderData.orderType,
-        price: orderData.price,
-        status: "open",
-      };
-
-      // add order to the list of user orders
-      userFound.orders.push(order);
-
-      // order should be added to the orderbook and the price to the bidsHeap if not present
-      const bidsOrders =
-        globalState.orderBooks[order.market]?.bids[order.price];
-
-      if (bidsOrders) {
-        bidsOrders.availableQty = (bidsOrders.availableQty ?? 0) + order.qty;
-        bidsOrders.openOrders.push({
-          userId,
-          qty: order.qty,
-          filledQty: 0,
-          orderId: order.orderId,
-          createdAt: new Date(),
-        });
-      } else {
-        // no order in the orderbook for the same price
-        globalState.orderBooks[order.market].bidsHeap.push(Number(order.price));
-        globalState.orderBooks[order.market].bids[order.price] = {
-          availableQty: order.qty,
-          openOrders: [
-            {
-              userId,
-              qty: order.qty,
-              filledQty: 0,
-              orderId: order.orderId,
-              createdAt: new Date(),
-            },
-          ],
-        };
-      }
-      return res.status(201).json(order);
-    } else {
-      // price is present
-      const fullPriceToBeDeleted: number[] = [];
-      // this is storing the userId's
-      const partiallyFilledPriceOrders: Record<string, number> = {};
-      let partialFilledPrice;
-      const asks = globalState.orderBooks[orderData.market].asks;
-      let orderQty = orderData.qty;
-
-      // two scenero can happen either full filled or partial filled can happened together or paritially
-
-      while (!asksHeap.isEmpty() && asksHeap.peek()! <= orderData.price) {
-        if (orderQty === 0) {
-          break;
-        }
-        const price = asksHeap.peek()!;
-        const askPriceBid = asks[price]!;
-
-        if (askPriceBid.availableQty <= orderQty) {
-          fullPriceToBeDeleted.push(price);
-          orderQty -= askPriceBid.availableQty;
-          asksHeap.pop();
-        } else {
-          for (const order of askPriceBid.openOrders) {
-            if (orderQty === 0) break;
-            let quantityFilled;
-            if (orderQty <= order.qty - order.filledQty) {
-              order.filledQty += orderQty;
-              quantityFilled = orderQty;
-              orderQty = 0;
-            } else {
-              orderQty -= order.qty - order.filledQty;
-              quantityFilled = order.qty - order.filledQty;
-              order.filledQty = order.qty;
-            }
-            partiallyFilledPriceOrders[order.orderId] = quantityFilled;
-          }
-          partialFilledPrice = price;
-        }
-      }
-
-      // handle the full price
-      fullPriceToBeDeleted.forEach((fullPrice) => {
-        asks[fullPrice]?.openOrders.forEach((order) => {
-          const sellerUser = globalState.users.find(
-            (user) => user.userId === order.userId,
-          )!;
-          const sellerOrder = sellerUser.orders.find(
-            (ord) => ord.orderId === order.orderId,
-          )!;
-
-          globalState.fills.push({
-            taker: userFound.userId,
-            long: userFound.userId,
-            maker: order.userId,
-            market: orderData.market,
-            price: fullPrice,
-            short: order.userId,
-            qty: order.qty - order.filledQty,
-          });
-          // update the user order which is the maker
-
-          sellerOrder.status = "filled";
-          const sellerMargin = sellerOrder.margin;
-          const sellerQty = sellerOrder.qty;
-          // add to positions of the user who is buying
-          globalState.addToUserPostion(
-            orderData.market,
-            "LONG",
-            sellerQty!,
-            (order.qty! / orderData.qty) * orderData.equity,
-            userFound.userId,
-            fullPrice,
-          );
-          // add to positions of the user who is selling
-          globalState.addToUserPostion(
-            orderData.market,
-            "SHORT",
-            sellerQty!,
-            sellerMargin!,
-            order.userId,
-            fullPrice,
-          );
-          //
-        });
-
-        delete asks[fullPrice];
-      });
-
-      // handle the partial price long
-      if (partialFilledPrice) {
-        for (const order of asks![partialFilledPrice]!.openOrders) {
-          const sellerUser = globalState.users.find(
-            (user) => user.userId === order.userId,
-          )!;
-          const sellerOrder = sellerUser.orders.find(
-            (ord) => ord.orderId === order.orderId,
-          )!;
-          if (partiallyFilledPriceOrders[order.orderId] === undefined) continue;
-          if (order.filledQty === order.qty) {
-            globalState.fills.push({
-              taker: userFound.userId,
-              long: userFound.userId,
-              maker: order.userId,
-              market: orderData.market,
-              price: partialFilledPrice,
-              short: order.userId,
-              qty: partiallyFilledPriceOrders[order.orderId]!,
-            });
-            // update the user order which is the maker
-            sellerOrder.status = "filled";
-
-            // add to positions of the user who is buying
-            globalState.addToUserPostion(
-              orderData.market,
-              "LONG",
-              partiallyFilledPriceOrders[order.orderId]!,
-              (partiallyFilledPriceOrders[order.orderId]! / orderData.qty) *
-                orderData.equity,
-              userFound.userId,
-              partialFilledPrice,
-            );
-            // add to positions of the user who is selling
-            globalState.addToUserPostion(
-              orderData.market,
-              "SHORT",
-              partiallyFilledPriceOrders[order.orderId]!,
-              sellerOrder.margin,
-              order.userId,
-              partialFilledPrice,
-            );
-          } else {
-            globalState.fills.push({
-              taker: userFound.userId,
-              long: userFound.userId,
-              maker: order.userId,
-              market: orderData.market,
-              price: partialFilledPrice,
-              short: order.userId,
-              qty: partiallyFilledPriceOrders[order.orderId]!,
-            });
-
-            // update the user order which is the maker
-            sellerOrder.status = "partially_filled";
-
-            const sellerMargin = sellerOrder.margin;
-            // add to positions of the user who is buying
-            globalState.addToUserPostion(
-              orderData.market,
-              "LONG",
-              partiallyFilledPriceOrders[order.orderId]!,
-              (partiallyFilledPriceOrders[order.orderId]! / orderData.qty) *
-                orderData.equity,
-              userFound.userId,
-              partialFilledPrice,
-            );
-            // add to positions of the user who is selling
-            globalState.addToUserPostion(
-              orderData.market,
-              "SHORT",
-              partiallyFilledPriceOrders[order.orderId]!,
-              sellerMargin!,
-              order.userId,
-              partialFilledPrice,
-            );
-          }
-
-          asks[partialFilledPrice]!.availableQty -=
-            partiallyFilledPriceOrders[order.orderId]!;
-        }
-        asks[partialFilledPrice]!.openOrders = asks[
-          partialFilledPrice
-        ]!.openOrders.filter((ord) => ord.filledQty < ord.qty);
-      }
-
-      // register the order in the user order;
-      let order: Order;
-
-      if (orderQty === 0) {
-        order = {
-          orderId: crypto.randomUUID(),
-          market: orderData.market,
-          type: orderData.type,
-          qty: orderData.qty,
-          margin: orderData.equity,
-          orderType: orderData.orderType,
-          price: orderData.price,
-          status: "filled",
-        };
-      } else {
-        order = {
-          orderId: crypto.randomUUID(),
-          market: orderData.market,
-          type: orderData.type,
-          qty: orderData.qty,
-          margin: orderData.equity,
-          orderType: orderData.orderType,
-          price: orderData.price,
-          status: "partially_filled",
-        };
-        // order should be added to the orderbook and the price to the bidsHeap if not present
-        const bidsOrders =
-          globalState.orderBooks[order.market]?.bids[order.price];
-        const filledQty = orderData.qty - orderQty;
-        const unfilledQty = orderQty;
-
-        if (bidsOrders) {
-          bidsOrders.availableQty = (bidsOrders.availableQty ?? 0) + orderQty;
-          bidsOrders.openOrders.push({
-            userId,
-            qty: order.qty,
-            filledQty: filledQty,
-            orderId: order.orderId,
-            createdAt: new Date(),
-          });
-        } else {
-          // no order in the orderbook for the same price
-          globalState.orderBooks[order.market].bidsHeap.push(
-            Number(order.price),
-          );
-          globalState.orderBooks[order.market].bids[order.price] = {
-            availableQty: unfilledQty,
-            openOrders: [
-              {
-                userId,
-                qty: order.qty,
-                filledQty: filledQty,
-                orderId: order.orderId,
-                createdAt: new Date(),
-              },
-            ],
-          };
-        }
-      }
-      userFound.orders.push(order);
-      return res.status(201).json(order);
+    if (!token) {
+      return next(new AppError("Authorization token missing", 401));
     }
-  } else {
-    // check if there is a match or not through the maxHeap of the bidsHeap.
-    const bidsHeap = globalState.orderBooks[orderData.market].bidsHeap;
 
-    const isPriceAbsent =
-      bidsHeap.isEmpty() || bidsHeap.peek()! < orderData.price;
-
-    if (isPriceAbsent) {
-      const order: Order = {
-        orderId: crypto.randomUUID(),
-        market: orderData.market,
-        type: orderData.type,
-        qty: orderData.qty,
-        margin: orderData.equity,
-        orderType: orderData.orderType,
-        price: orderData.price,
-        status: "open",
-      };
-
-      // add order to the list of user orders
-      userFound.orders.push(order);
-
-      // order should be added to the orderbook and the price to the asksHeap if not present
-      const asksOrders =
-        globalState.orderBooks[order.market]?.asks[order.price];
-
-      if (asksOrders) {
-        asksOrders.availableQty = (asksOrders.availableQty ?? 0) + order.qty;
-        asksOrders.openOrders.push({
-          userId,
-          qty: order.qty,
-          filledQty: 0,
-          orderId: order.orderId,
-          createdAt: new Date(),
-        });
-      } else {
-        // no order in the orderbook for the same price
-        globalState.orderBooks[order.market].asksHeap.push(Number(order.price));
-        globalState.orderBooks[order.market].asks[order.price] = {
-          availableQty: order.qty,
-          openOrders: [
-            {
-              userId,
-              qty: order.qty,
-              filledQty: 0,
-              orderId: order.orderId,
-              createdAt: new Date(),
-            },
-          ],
-        };
-      }
-      return res.status(201).json(order);
-    } else {
-      // price is present
-      const fullPriceToBeDeleted: number[] = [];
-      // this is storing the userId's
-      const partiallyFilledPriceOrders: Record<string, number> = {};
-      let partialFilledPrice;
-      const bids = globalState.orderBooks[orderData.market].bids;
-      let orderQty = orderData.qty;
-
-      while (!bidsHeap.isEmpty() && bidsHeap.peek()! >= orderData.price) {
-        if (orderQty === 0) {
-          break;
-        }
-        const price = bidsHeap.peek()!;
-        const bidPriceBid = bids[price]!;
-
-        if (bidPriceBid.availableQty <= orderQty) {
-          fullPriceToBeDeleted.push(price);
-          orderQty -= bidPriceBid.availableQty;
-          bidsHeap.pop();
-        } else {
-          for (const order of bidPriceBid.openOrders) {
-            if (orderQty === 0) break;
-            let quantityFilled;
-            if (orderQty <= order.qty - order.filledQty) {
-              order.filledQty += orderQty;
-              quantityFilled = orderQty;
-              orderQty = 0;
-            } else {
-              orderQty -= order.qty - order.filledQty;
-              quantityFilled = order.qty - order.filledQty;
-              order.filledQty = order.qty;
-            }
-            partiallyFilledPriceOrders[order.orderId] = quantityFilled;
-          }
-          partialFilledPrice = price;
-        }
-      }
-      // handle the full price
-      fullPriceToBeDeleted.forEach((fullPrice) => {
-        bids[fullPrice]?.openOrders.forEach((order) => {
-          const buyerUser = globalState.users.find(
-            (user) => user.userId === order.userId,
-          )!;
-          const buyerOrder = buyerUser.orders.find(
-            (ord) => ord.orderId === order.orderId,
-          )!;
-
-          globalState.fills.push({
-            taker: userFound.userId,
-            short: userFound.userId,
-            maker: order.userId,
-            market: orderData.market,
-            price: fullPrice,
-            long: order.userId,
-            qty: order.qty - order.filledQty,
-          });
-          // update the user order which is the maker
-
-          buyerOrder.status = "filled";
-          const buyerMargin = buyerOrder.margin;
-          const buyerQty = buyerOrder.qty;
-          // add to positions of the user who is buying
-          globalState.addToUserPostion(
-            orderData.market,
-            "LONG",
-            buyerQty!,
-            buyerMargin!,
-            order.userId,
-            fullPrice,
-          );
-
-          // add to positions of the user who is selling
-          globalState.addToUserPostion(
-            orderData.market,
-            "SHORT",
-            buyerQty!,
-            (buyerQty! / orderData.qty) * orderData.equity,
-            userFound.userId,
-            fullPrice,
-          );
-        });
-
-        delete bids[fullPrice];
-      });
-
-      // handle the partial price for short
-      if (partialFilledPrice) {
-        for (const order of bids![partialFilledPrice]!.openOrders) {
-          const buyerUser = globalState.users.find(
-            (user) => user.userId === order.userId,
-          )!;
-          const buyerOrder = buyerUser.orders.find(
-            (ord) => ord.orderId === order.orderId,
-          )!;
-          if (partiallyFilledPriceOrders[order.orderId] === undefined) continue;
-          if (order.filledQty === order.qty) {
-            globalState.fills.push({
-              taker: userFound.userId,
-              short: userFound.userId,
-              maker: order.userId,
-              market: orderData.market,
-              price: partialFilledPrice,
-              long: order.userId,
-              qty: partiallyFilledPriceOrders[order.orderId]!,
-            });
-
-            // update the user order which is the maker
-            buyerOrder.status = "filled";
-
-            // add to positions of the user who is buying
-            globalState.addToUserPostion(
-              orderData.market,
-              "LONG",
-              partiallyFilledPriceOrders[order.orderId]!,
-              buyerOrder.margin,
-              order.userId,
-              partialFilledPrice,
-            );
-            // add to positions of the user who is selling
-            globalState.addToUserPostion(
-              orderData.market,
-              "SHORT",
-              partiallyFilledPriceOrders[order.orderId]!,
-              (partiallyFilledPriceOrders[order.orderId]! / orderData.qty) *
-                orderData.equity,
-              userFound.userId,
-              partialFilledPrice,
-            );
-          } else {
-            globalState.fills.push({
-              taker: userFound.userId,
-              short: userFound.userId,
-              maker: order.userId,
-              market: orderData.market,
-              price: partialFilledPrice,
-              long: order.userId,
-              qty: partiallyFilledPriceOrders[order.orderId]!,
-            });
-
-            // update the user order which is the maker
-            buyerOrder.status = "partially_filled";
-
-            const buyerMargin = buyerOrder.margin;
-            // add to positions of the user who is buying
-            globalState.addToUserPostion(
-              orderData.market,
-              "LONG",
-              partiallyFilledPriceOrders[order.orderId]!,
-              buyerMargin,
-              order.userId,
-              partialFilledPrice,
-            );
-            // add to positions of the user who is selling
-            globalState.addToUserPostion(
-              orderData.market,
-              "SHORT",
-              partiallyFilledPriceOrders[order.orderId]!,
-              (partiallyFilledPriceOrders[order.orderId]! / orderData.qty) *
-                orderData.equity,
-              userFound.userId,
-              partialFilledPrice,
-            );
-          }
-
-          bids[partialFilledPrice]!.availableQty -=
-            partiallyFilledPriceOrders[order.orderId]!;
-        }
-        bids[partialFilledPrice]!.openOrders = bids[
-          partialFilledPrice
-        ]!.openOrders.filter((ord) => ord.filledQty < ord.qty);
-      }
-
-      // register the order in the user order;
-      let order: Order;
-
-      if (orderQty === 0) {
-        order = {
-          orderId: crypto.randomUUID(),
-          market: orderData.market,
-          type: orderData.type,
-          qty: orderData.qty,
-          margin: orderData.equity,
-          orderType: orderData.orderType,
-          price: orderData.price,
-          status: "filled",
-        };
-      } else {
-        order = {
-          orderId: crypto.randomUUID(),
-          market: orderData.market,
-          type: orderData.type,
-          qty: orderData.qty,
-          margin: orderData.equity,
-          orderType: orderData.orderType,
-          price: orderData.price,
-          status: "partially_filled",
-        };
-        // order should be added to the orderbook and the price to the asksHeap if not present
-        const asksOrders =
-          globalState.orderBooks[order.market]?.asks[order.price];
-        const filledQty = orderData.qty - orderQty;
-        const unfilledQty = orderQty;
-
-        if (asksOrders) {
-          asksOrders.availableQty = (asksOrders.availableQty ?? 0) + orderQty;
-          asksOrders.openOrders.push({
-            userId,
-            qty: order.qty,
-            filledQty: filledQty,
-            orderId: order.orderId,
-            createdAt: new Date(),
-          });
-        } else {
-          // no order in the orderbook for the same price
-          globalState.orderBooks[order.market].asksHeap.push(
-            Number(order.price),
-          );
-          globalState.orderBooks[order.market].asks[order.price] = {
-            availableQty: unfilledQty,
-            openOrders: [
-              {
-                userId,
-                qty: order.qty,
-                filledQty: filledQty,
-                orderId: order.orderId,
-                createdAt: new Date(),
-              },
-            ],
-          };
-        }
-      }
-      userFound.orders.push(order);
-      return res.status(201).json(order);
+    if (!ADMIN_SECRET) {
+      throw new Error("ADMIN_SECRET is missing");
     }
+
+    if (token !== ADMIN_SECRET) {
+      throw new Error("ADMIN_SECRET is invalid");
+    }
+
+    next();
+  } catch (err) {
+    return next(new AppError("Invalid Token", 401));
   }
+  const result = OrderSchema.safeParse(req.body);
+
+  if (!result.success) {
+    return next(new AppError("Invalid Request Body", 400, result.error.issues));
+  }
+  const orderData = result.data;
+  const userId = (req as Request & { user: string }).user;
+
+  return matchingEngine(res, next, userId, orderData);
 });
 
 app.delete("/order", authMiddleWare, (req, res) => {});
@@ -650,12 +82,7 @@ app.get("/fills", authMiddleWare, (req, res) => {});
 
 app.use(notFound);
 app.use(errorHandler);
-
-async function liqudationChecks(asset: string, price: number) {}
-
-async function onPriceUpdateFromBinance(asset: string, price: number) {
-  liqudationChecks(asset, price);
-}
+onPriceUpdateFromBinance();
 
 app.listen(PORT, () => {
   console.log(`Running on port ${PORT}`);

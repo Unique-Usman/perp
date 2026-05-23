@@ -12,6 +12,7 @@ class GlobalState {
       asksHeap: new Heap<number>((a, b) => a - b),
       lastTradedPrice: 0,
       indexPrice: 0,
+      markPrice: 0,
     },
     ETH: {
       bids: {},
@@ -20,6 +21,7 @@ class GlobalState {
       asksHeap: new Heap<number>((a, b) => a - b),
       lastTradedPrice: 0,
       indexPrice: 0,
+      markPrice: 0,
     },
     BTC: {
       bids: {},
@@ -29,22 +31,7 @@ class GlobalState {
 
       lastTradedPrice: 0,
       indexPrice: 0,
-    },
-    USD: {
-      bids: {},
-      asks: {},
-      bidsHeap: new Heap<number>((a, b) => b - a),
-      asksHeap: new Heap<number>((a, b) => a - b),
-      lastTradedPrice: 0,
-      indexPrice: 0,
-    },
-    USDT: {
-      bids: {},
-      asks: {},
-      bidsHeap: new Heap<number>((a, b) => b - a),
-      asksHeap: new Heap<number>((a, b) => a - b),
-      lastTradedPrice: 0,
-      indexPrice: 0,
+      markPrice: 0,
     },
   };
   fills: Fills = [];

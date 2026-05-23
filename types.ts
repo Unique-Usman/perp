@@ -5,7 +5,7 @@ type Collateral = {
   locked: number;
 };
 
-export type Market = "SOL" | "ETH" | "BTC" | "USD" | "USDT";
+export type Market = "SOL" | "ETH" | "BTC";
 
 type Position = {
   market: Market;
@@ -23,7 +23,7 @@ export type Order = {
   type: "LONG" | "SHORT";
   qty: number;
   margin: number;
-  orderType: "limit" | "market";
+  orderType: "limit" | "market" | "liquidation";
   price: number;
   status: "filled" | "cancelled" | "partially_filled" | "open";
 };
@@ -60,6 +60,7 @@ type Orderbook = {
   asksHeap: Heap<number>;
   lastTradedPrice: number;
   indexPrice: number;
+  markPrice: number;
 };
 
 export type Orderbooks = Record<Market, Orderbook>;
@@ -72,6 +73,12 @@ type Fill = {
   price: number;
   long: string;
   short: string;
+};
+
+export type BinancePrice = {
+  "solusdt@markPrice": string;
+  "btcusdt@markPrice": string;
+  "ethusdt@markPrice": string;
 };
 
 export type Fills = Array<Fill>;

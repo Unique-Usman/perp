@@ -10,6 +10,25 @@ export const OrderSchema = z.object({
   qty: z.number(),
   equity: z.number(),
   type: z.enum(["LONG", "SHORT"]),
-  market: z.enum(["SOL", "ETH", "BTC", "USD", "USDT"]),
+  market: z.enum(["SOL", "ETH", "BTC"]),
   orderType: z.enum(["market", "limit"]),
+});
+
+export const BinancePriceSchema = z.object({
+  stream: z.enum([
+    "solusdt@markPrice",
+    "btcusdt@markPrice",
+    "ethusdt@markPrice",
+  ]),
+  data: z.object({
+    e: z.string(),
+    E: z.number(),
+    s: z.string(),
+    p: z.string(),
+    ap: z.string(),
+    P: z.string(),
+    i: z.string(),
+    r: z.string(),
+    T: z.number(),
+  }),
 });

@@ -16,11 +16,14 @@
   "dependencies": {
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/ws": "^8.18.1",
+    "axios": "^1.16.1",
     "bcrypt": "^6.0.0",
     "crypt": "^0.0.2",
     "express": "^5.2.1",
     "heap-js": "^2.7.1",
     "jsonwebtoken": "^9.0.3",
+    "ws": "^8.21.0",
     "zod": "^4.4.3"
   }
 }
