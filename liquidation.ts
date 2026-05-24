@@ -19,7 +19,7 @@ async function liquidationChecks(asset: string, price: number) {
 
       if (position.type === "LONG") {
         // LONG
-        if (price < position.liquidationPrice) continue;
+        if (price > position.liquidationPrice) continue;
         //TODO: Do we need a confirmation here ?
         await liquidate(
           position.averagePrice,
@@ -32,7 +32,7 @@ async function liquidationChecks(asset: string, price: number) {
         );
       } else {
         // SHORT
-        if (price > position.liquidationPrice) continue;
+        if (price < position.liquidationPrice) continue;
         await liquidate(
           position.averagePrice,
           position.qty,
@@ -64,8 +64,10 @@ async function liquidate(
   userId: string,
 ) {
   //TODO: This call should handle error better
+  const baseUrl = process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 5000}`;
+
   await axios.post(
-    "/liquidate",
+    `${baseUrl}/liquidate`,
     {
       price,
       qty,

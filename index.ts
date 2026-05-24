@@ -38,6 +38,16 @@ app.post("/order", authMiddleWare, (req, res, next) => {
 
 // This route is for the liquidation
 app.post("/liquidate", (req, res, next) => {
+  if (!ADMIN_SECRET) {
+    return next(
+      new AppError(
+        "Internal Server Error",
+        500,
+        "ADMIN_SECRET is not configured",
+      ),
+    );
+  }
+
   try {
     const authorization = req.headers.authorization;
 
@@ -50,16 +60,12 @@ app.post("/liquidate", (req, res, next) => {
       return next(new AppError("Authorization token missing", 401));
     }
 
-    if (!ADMIN_SECRET) {
-      throw new Error("ADMIN_SECRET is missing");
-    }
-
-    if (!ADMIN_SECRET) {
+    if (token !== ADMIN_SECRET) {
       return next(
         new AppError(
-          "Internal Server Error",
-          500,
-          "ADMIN_SECRET is not configured",
+          "Invalid Token",
+          401,
+          "Admin token does not match",
         ),
       );
     }
@@ -245,7 +251,7 @@ app.get("/fills", authMiddleWare, (req, res, next) => {
     return next(new AppError("User Not Found", 404));
   }
 
-  const fillsForTheUser = globalState.fills.find(
+  const fillsForTheUser = globalState.fills.filter(
     (fill) => fill.taker === userId || fill.maker === userId,
   );
 

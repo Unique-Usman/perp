@@ -11,7 +11,7 @@ export const OrderSchema = z.object({
   equity: z.number(),
   type: z.enum(["LONG", "SHORT"]),
   market: z.enum(["SOL", "ETH", "BTC"]),
-  orderType: z.enum(["market", "limit"]),
+  orderType: z.enum(["market", "limit", "liquidation"]),
   userId: z.string().optional(),
 });
 
