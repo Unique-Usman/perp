@@ -42,6 +42,7 @@ export type User = {
   password: string;
   collateral: Collateral;
   positions: Positions;
+  closedPositions: Positions;
   orders: Orders;
 };
 

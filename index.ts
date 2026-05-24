@@ -187,20 +187,28 @@ app.get("/equity/available", authMiddleWare, (req, res, next) => {
 });
 
 app.get("/positions/open/:marketId", authMiddleWare, (req, res, next) => {
+  const marketId = req.params.marketId;
   const userId = (req as Request & { user: string }).user;
   const user = globalState.users.find((user) => user.userId === userId);
   if (!user) {
     return next(new AppError("User Not Found", 404));
   }
 
-  res.status(200).json(user.positions);
+  res.status(200).json(
+    user.positions.filter((position) => position.market === marketId),
+  );
 });
 app.get("/positions/closed/:marketId", authMiddleWare, (req, res, next) => {
+  const marketId = req.params.marketId;
   const userId = (req as Request & { user: string }).user;
   const user = globalState.users.find((user) => user.userId === userId);
   if (!user) {
     return next(new AppError("User Not Found", 404));
   }
+
+  res.status(200).json(
+    user.closedPositions.filter((position) => position.market === marketId),
+  );
 });
 
 app.get("/orders/open/:marketId", authMiddleWare, (req, res, next) => {

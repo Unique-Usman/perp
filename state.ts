@@ -123,6 +123,10 @@ class GlobalState {
       // Credit user collateral with released margin + realized PnL
       user.collateral.available += totalMargin + realizedPnl;
       user.collateral.locked -= totalMargin;
+      user.closedPositions.push({
+        ...position,
+        pnL: realizedPnl,
+      });
       user.positions = user.positions.filter((p) => p !== position);
     } else if (position.qty > qty) {
       let realizedPnl = 0;
@@ -135,6 +139,16 @@ class GlobalState {
 
       // Release proportional margin from the existing position
       const releasedMargin = (position.margin * closedQty) / position.qty;
+
+      user.closedPositions.push({
+        market,
+        type: position.type,
+        qty: closedQty,
+        margin: releasedMargin,
+        liquidationPrice: position.liquidationPrice,
+        pnL: realizedPnl,
+        averagePrice: position.averagePrice,
+      });
 
       position.qty -= qty;
       position.margin -= releasedMargin;
@@ -164,6 +178,10 @@ class GlobalState {
       // Release proportional margin from the existing position
       const releasedIncomingMargin = (margin * closedQty) / qty;
 
+      user.closedPositions.push({
+        ...position,
+        pnL: realizedPnl,
+      });
       user.positions = user.positions.filter((p) => p !== position);
       // Total margin, the released margin and the incoming margin
       const totalMargin = position.margin + releasedIncomingMargin;
