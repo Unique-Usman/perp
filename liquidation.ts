@@ -64,7 +64,8 @@ async function liquidate(
   userId: string,
 ) {
   //TODO: This call should handle error better
-  const baseUrl = process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 5000}`;
+  const baseUrl =
+    process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 5000}`;
 
   await axios.post(
     `${baseUrl}/liquidate`,
@@ -88,7 +89,7 @@ async function liquidate(
 // constantly check the update of price on binance and liquidate when neccessary
 export async function onPriceUpdateFromBinance() {
   const wss = new WebSocket(
-    "wss://fstream.binance.com/stream?streams=btcusdt@markPrice/ethusdt@markPrice/solusdt@markPrice",
+    "wss://fstream.binance.com/market/stream?streams=btcusdt@markPrice/ethusdt@markPrice/solusdt@markPrice",
   );
 
   let binancePrice: BinancePrice = {
@@ -98,7 +99,7 @@ export async function onPriceUpdateFromBinance() {
   };
 
   wss.on("open", () => {
-    console.log("Hello world");
+    console.log("Hello world from binance");
   });
 
   wss.onmessage = async (event) => {
