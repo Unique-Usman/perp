@@ -88,7 +88,7 @@ async function liquidate(
 // constantly check the update of price on binance and liquidate when neccessary
 export async function onPriceUpdateFromBinance() {
   const wss = new WebSocket(
-    "wss://fstream.binance.com/market/stream?streams=btcusdt@markPrice/ethusdt@markPrice/solusdt@markPrice",
+    "wss://fstream.binance.com/stream?streams=btcusdt@markPrice/ethusdt@markPrice/solusdt@markPrice",
   );
 
   let binancePrice: BinancePrice = {

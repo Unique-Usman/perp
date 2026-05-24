@@ -26,21 +26,15 @@ const matchingEngine = (
     orderData.orderType === "market" ||
     orderData.orderType === "liquidation"
   ) {
-    // if is market order, there is no need to have another logic, just append the minimum price for sale and the maximum price for buy, this is obviously not the most ideal way though
+    // Use the best available book price for market/liquidation orders.
     // update this to current price in of the orderData.market price if this is the first order;
     if (orderData.type === "SHORT") {
-      const sortedBuy = globalState.orderBooks[orderData.market].bidsHeap
-        .toArray()
-        .sort((a, b) => a - b);
-      orderData.price = sortedBuy[0]!;
+      orderData.price = globalState.orderBooks[orderData.market].bidsHeap.peek()!;
       if (!orderData.price) {
         orderData.price = globalState.orderBooks[orderData.market].markPrice;
       }
     } else {
-      const sortedAsk = globalState.orderBooks[orderData.market].asksHeap
-        .toArray()
-        .sort((a, b) => b - a);
-      orderData.price = sortedAsk[0]!;
+      orderData.price = globalState.orderBooks[orderData.market].asksHeap.peek()!;
 
       if (!orderData.price) {
         orderData.price = globalState.orderBooks[orderData.market].markPrice;
