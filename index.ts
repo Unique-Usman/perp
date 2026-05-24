@@ -171,12 +171,78 @@ app.delete("/order", authMiddleWare, (req, res, next) => {
   });
 });
 
-app.get("/equity/available", authMiddleWare, (req, res) => {});
-app.get("/positions/open/:marketId", authMiddleWare, (req, res) => {});
-app.get("/positions/closed/:marketId", authMiddleWare, (req, res) => {});
-app.get("/orders/open/:marketId", authMiddleWare, (req, res) => {});
-app.get("/orders/:marketId", authMiddleWare, (req, res) => {});
-app.get("/fills", authMiddleWare, (req, res) => {});
+app.get("/equity/available", authMiddleWare, (req, res, next) => {
+  const userId = (req as Request & { user: string }).user;
+
+  const user = globalState.users.find((user) => user.userId === userId);
+
+  if (!user) {
+    return next(new AppError("User Not Found", 404));
+  }
+  res.status(200).json({
+    available: user?.collateral.available,
+    locked: user?.collateral.locked,
+    total: user?.collateral.locked + user?.collateral.available,
+  });
+});
+
+app.get("/positions/open/:marketId", authMiddleWare, (req, res, next) => {
+  const userId = (req as Request & { user: string }).user;
+  const user = globalState.users.find((user) => user.userId === userId);
+  if (!user) {
+    return next(new AppError("User Not Found", 404));
+  }
+
+  res.status(200).json(user.positions);
+});
+app.get("/positions/closed/:marketId", authMiddleWare, (req, res, next) => {
+  const userId = (req as Request & { user: string }).user;
+  const user = globalState.users.find((user) => user.userId === userId);
+  if (!user) {
+    return next(new AppError("User Not Found", 404));
+  }
+});
+
+app.get("/orders/open/:marketId", authMiddleWare, (req, res, next) => {
+  const marketId = req.params.marketId;
+
+  const userId = (req as Request & { user: string }).user;
+  const user = globalState.users.find((user) => user.userId === userId);
+  if (!user) {
+    return next(new AppError("User Not Found", 404));
+  }
+  const orders = user.orders.filter(
+    (order) => order.market === marketId && order.status === "open",
+  );
+  return res.status(200).json(orders);
+});
+
+// marketId => BTC, SOL, ETH
+app.get("/orders/:marketId", authMiddleWare, (req, res, next) => {
+  const marketId = req.params.marketId;
+
+  const userId = (req as Request & { user: string }).user;
+  const user = globalState.users.find((user) => user.userId === userId);
+  if (!user) {
+    return next(new AppError("User Not Found", 404));
+  }
+  const orders = user.orders.filter((order) => order.market === marketId);
+  return res.status(200).json(orders);
+});
+
+app.get("/fills", authMiddleWare, (req, res, next) => {
+  const userId = (req as Request & { user: string }).user;
+  const user = globalState.users.find((user) => user.userId === userId);
+  if (!user) {
+    return next(new AppError("User Not Found", 404));
+  }
+
+  const fillsForTheUser = globalState.fills.find(
+    (fill) => fill.taker === userId || fill.maker === userId,
+  );
+
+  res.status(200).json(fillsForTheUser);
+});
 
 app.use(notFound);
 app.use(errorHandler);
